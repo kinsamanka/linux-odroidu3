@@ -41,10 +41,11 @@
 	.macro load_tls base, tp, tpuser
 	ldr     \tp, [\base, #TI_TP_VALUE]
 	.endm
-	
-	.macro switch_tls base, tp, tpuser, tmp1, tmp2
-	set_tls \tp, \tmp1, \tmp2
-	.endm
+	/* disabled due to commit 1f8be428
+	 * .macro switch_tls base, tp, tpuser, tmp1, tmp2
+	 * set_tls \tp, \tmp1, \tmp2
+	 * .endm
+	 */
 #else
 	.macro load_tls base, tp, tpuser
 	ldr	\tp, [\base, #TI_TP_VALUE]
