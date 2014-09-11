@@ -1,0 +1,21 @@
+--- arch/arm/kernel/smp_twd.c
++++ arch/arm/kernel/smp_twd.c
+@@ -21,13 +21,18 @@
+ #include <linux/io.h>
+ #include <linux/of_irq.h>
+ #include <linux/of_address.h>
++#include <linux/ipipe_tickdev.h>
++#include <linux/irqchip/arm-gic.h>
+ 
+ #include <asm/smp_plat.h>
+ #include <asm/smp_twd.h>
+ #include <asm/localtimer.h>
++#include <asm/cputype.h>
++#include <asm/ipipe.h>
+ 
+ /* set up by the platform code */
+ static void __iomem *twd_base;
++static struct clk *twd_clk;
+ 
+ static struct clk *twd_clk;
+ static unsigned long twd_timer_rate;
