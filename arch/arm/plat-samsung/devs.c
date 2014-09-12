@@ -19,6 +19,7 @@
 #include <linux/serial_core.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
+#include <linux/gpio.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/dma-mapping.h>
@@ -308,11 +309,10 @@ struct platform_device s5p_device_jpeg = {
 /* FIMD0 */
 static struct mali_gpu_device_data mali_gpu_data = {
         .shared_mem_size = 256*1024*1024,
-#ifdef CONFIG_MALI_DVFS
         .utilization_interval = 1000,
         .utilization_handler = mali_gpu_utilization_handler,
-#endif
 };
+
 static struct resource mali_gpu_resource[] = {
 		MALI_GPU_RESOURCES_MALI400_MP4(MALI_BASE_ADDR,
 			IRQ_GP_3D,
@@ -332,7 +332,11 @@ struct platform_device mali_gpu_device = {
         .id             = 0,
         .num_resources  = ARRAY_SIZE(mali_gpu_resource),
         .resource       = mali_gpu_resource,
-        .dev.platform_data = &mali_gpu_data,
+        .dev            = {
+            .dma_mask = &samsung_device_dma_mask,
+            .coherent_dma_mask = DMA_BIT_MASK(32),
+            .platform_data = &mali_gpu_data,
+        }
 };
 
 #ifdef CONFIG_S5P_DEV_FIMD0
@@ -518,7 +522,7 @@ struct platform_device s3c_device_i2c0 = {
 struct s3c2410_platform_i2c default_i2c_data __initdata = {
 	.flags		= 0,
 	.slave_addr	= 0x10,
-	.frequency	= 100*1000,
+	.frequency	= 400*1000,
 	.sda_delay	= 100,
 };
 
@@ -786,7 +790,7 @@ void __init s5p_i2c_hdmiphy_set_platdata(struct s3c2410_platform_i2c *pd)
 static struct s5p_hdmi_platform_data s5p_hdmi_def_platdata;
 
 void __init s5p_hdmi_set_platdata(struct i2c_board_info *hdmiphy_info,
-				  struct i2c_board_info *mhl_info, int mhl_bus)
+				  struct i2c_board_info *mhl_info, int mhl_bus, int hpd_gpio)
 {
 	struct s5p_hdmi_platform_data *pd = &s5p_hdmi_def_platdata;
 
@@ -801,6 +805,7 @@ void __init s5p_hdmi_set_platdata(struct i2c_board_info *hdmiphy_info,
 	pd->hdmiphy_info = hdmiphy_info;
 	pd->mhl_info = mhl_info;
 	pd->mhl_bus = mhl_bus;
+	pd->hpd_gpio = hpd_gpio;
 
 	s3c_set_platdata(pd, sizeof(struct s5p_hdmi_platform_data),
 			 &s5p_device_hdmi);
@@ -1504,6 +1509,10 @@ void __init s5p_ehci_set_platdata(struct s5p_ehci_platdata *pd)
 		npd->phy_init = s5p_usb_phy_init;
 	if (!npd->phy_exit)
 		npd->phy_exit = s5p_usb_phy_exit;
+	if (!npd->phy_suspend)
+		npd->phy_suspend = s5p_usb_phy_suspend;
+	if (!npd->phy_resume)
+		npd->phy_resume = s5p_usb_phy_resume;
 }
 #endif /* CONFIG_S5P_DEV_USB_EHCI */
 
@@ -1537,8 +1546,50 @@ void __init s3c_hsotg_set_platdata(struct s3c_hsotg_plat *pd)
 		npd->phy_init = s5p_usb_phy_init;
 	if (!npd->phy_exit)
 		npd->phy_exit = s5p_usb_phy_exit;
+	if (!npd->phy_suspend)
+		npd->phy_suspend = s5p_usb_phy_suspend;
+	if (!npd->phy_resume)
+		npd->phy_resume = s5p_usb_phy_resume;
+	
+	npd -> phy_type = S5P_USB_PHY_DEVICE;
 }
 #endif /* CONFIG_S3C_DEV_USB_HSOTG */
+
+#ifdef CONFIG_USB_EXYNOS_SWITCH
+/* USB Switch */
+static struct resource s5p_usbswitch_resource[] = {
+	[0] = {
+		.start = IRQ_EINT(25),
+		.end   = IRQ_EINT(25),
+		.flags = IORESOURCE_IRQ,
+	},
+	[1] = {
+		.start = IRQ_EINT(14),
+		.end   = IRQ_EINT(14),
+		.flags = IORESOURCE_IRQ,
+	}
+};
+
+struct platform_device s5p_device_usbswitch = {
+	.name		= "exynos-usb-switch",
+	.id		= -1,
+	.num_resources	= ARRAY_SIZE(s5p_usbswitch_resource),
+	.resource	= s5p_usbswitch_resource,
+};
+
+void __init s5p_usbswitch_set_platdata(struct s5p_usbswitch_platdata *pd)
+{
+	struct s5p_usbswitch_platdata *npd;
+
+	npd = s3c_set_platdata(pd, sizeof(struct s5p_usbswitch_platdata),
+			&s5p_device_usbswitch);
+
+	s5p_usbswitch_resource[0].start = gpio_to_irq(npd->gpio_host_detect);
+	s5p_usbswitch_resource[0].end = gpio_to_irq(npd->gpio_host_detect);
+	s5p_usbswitch_resource[1].start = gpio_to_irq(npd->gpio_device_detect);
+	s5p_usbswitch_resource[1].end = gpio_to_irq(npd->gpio_device_detect);
+}
+#endif /* CONFIG_USB_EXYNOS_SWITCH */
 
 /* USB High Spped 2.0 Device (Gadget) */
 

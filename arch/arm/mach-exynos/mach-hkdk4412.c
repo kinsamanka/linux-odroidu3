@@ -12,6 +12,8 @@
 #include <linux/gpio.h>
 #include <linux/gpio_keys.h>
 #include <linux/i2c.h>
+#include <linux/i2c-gpio.h>
+#include <linux/i2c/pca953x.h>
 #include <linux/input.h>
 #include <linux/io.h>
 #include <linux/mfd/max77686.h>
@@ -26,9 +28,11 @@
 #include <linux/platform_data/i2c-s3c2410.h>
 #include <linux/platform_data/usb-ehci-s5p.h>
 #include <linux/platform_data/usb-exynos.h>
+#include <linux/platform_data/usb3503.h>
 #include <linux/delay.h>
 #include <linux/lcd.h>
 #include <linux/clk.h>
+#include <linux/spi/spi.h>
 #include <linux/reboot.h>
 
 #include <asm/mach/arch.h>
@@ -49,13 +53,18 @@
 
 #include <video/platform_lcd.h>
 #include <video/samsung_fimd.h>
+#include <linux/platform_data/spi-s3c64xx.h>
 
+#include <mach/gpio.h>
 #include <mach/map.h>
 #include <mach/regs-pmu.h>
 #include <mach/dwmci.h>
+#include <drm/exynos_drm.h>
 
 #include "common.h"
 #include "pmic-77686.h"
+
+#include <linux/w1-gpio.h>
 
 extern void exynos4_setup_dwmci_cfg_gpio(struct platform_device *dev, int width);
 
@@ -106,13 +115,26 @@ static struct s3c2410_uartcfg hkdk4412_uartcfgs[] __initdata = {
 
 
 #if defined(CONFIG_USB_HSIC_USB3503)
-#include <linux/platform_data/usb3503.h>
-
 static struct usb3503_platform_data usb3503_pdata = {
-	.initial_mode	= USB3503_MODE_HUB,
-	.gpio_intn	= EXYNOS4_GPX3(0),
+	.initial_mode	= 	USB3503_MODE_HUB,
+#if defined(CONFIG_ODROID_U2)
+	.ref_clk		= 	USB3503_REFCLK_24M,
+#else
+	.ref_clk		= 	USB3503_REFCLK_26M,
+#endif
+	.gpio_intn		= EXYNOS4_GPX3(0),
 	.gpio_connect	= EXYNOS4_GPX3(4),
-	.gpio_reset	= EXYNOS4_GPX3(5),
+	.gpio_reset		= EXYNOS4_GPX3(5),
+};
+#endif
+
+#if defined(CONFIG_SND_SOC_MAX98090)
+#include <sound/max98090.h>
+static struct max98090_pdata max98090 = {
+	.digmic_left_mode	= 0,
+	.digmic_right_mode	= 0,
+	.digmic_3_mode		= 0,
+	.digmic_4_mode		= 0,
 };
 #endif
 
@@ -133,8 +155,36 @@ static struct i2c_board_info hkdk4412_i2c_devs1[] __initdata = {
 #if defined(CONFIG_SND_SOC_MAX98090)
 	{
 		I2C_BOARD_INFO("max98090", (0x20>>1)),
+		.platform_data  = &max98090,
+		.irq		= IRQ_EINT(0),
 	},
 #endif
+};
+
+/* I2C2 bus GPIO-Bitbanging */
+#define		GPIO_I2C2_SDA	EXYNOS4_GPA0(6)
+#define		GPIO_I2C2_SCL	EXYNOS4_GPA0(7)
+static struct 	i2c_gpio_platform_data 	i2c2_gpio_platdata = {
+	.sda_pin = GPIO_I2C2_SDA,
+	.scl_pin = GPIO_I2C2_SCL,
+	.udelay  = 5,
+	.sda_is_open_drain = 0,
+	.scl_is_open_drain = 0,
+	.scl_is_output_only = 0
+};
+
+static struct 	platform_device 	gpio_device_i2c2 = {
+	.name 	= "i2c-gpio",
+	.id  	= 2,    // adepter number
+	.dev.platform_data = &i2c2_gpio_platdata,
+};
+
+/* Odroid-O2 schematics show the DDC of the remote HDMI device connected to
+ * I2C2. HDMI specs state that DDC always sits at bus address 0x50. */
+static struct i2c_board_info hkdk4412_i2c_devs2[] __initdata = {
+	{
+		I2C_BOARD_INFO("s5p_ddc", 0x50),
+	},
 };
 
 static struct i2c_board_info hkdk4412_i2c_devs3[] __initdata = {
@@ -144,6 +194,64 @@ static struct i2c_board_info hkdk4412_i2c_devs3[] __initdata = {
 static struct i2c_board_info hkdk4412_i2c_devs7[] __initdata = {
 	/* nothing here yet */
 };
+
+#if defined(CONFIG_ODROID_U2)
+/* for u3 I/O shield board */
+#define		GPIO_I2C4_SDA	EXYNOS4_GPX1(1) /* GPIO-PIN 200 */
+#define		GPIO_I2C4_SCL	EXYNOS4_GPX1(0) /* GPIO-PIN 199 */
+
+static struct 	i2c_gpio_platform_data 	i2c4_gpio_platdata = {
+	.sda_pin = GPIO_I2C4_SDA,
+	.scl_pin = GPIO_I2C4_SCL,
+	.udelay  = 0,
+	.sda_is_open_drain = 0,
+	.scl_is_open_drain = 0,
+	.scl_is_output_only = 0
+};
+
+static struct 	platform_device 	gpio_device_i2c4 = {
+	.name 	= "i2c-gpio",
+	.id  	= 4,    // adepter number
+	.dev.platform_data = &i2c4_gpio_platdata,
+};
+
+#if defined(CONFIG_W1_MASTER_GPIO) || defined(CONFIG_W1_MASTER_GPIO_MODULE)
+/* Enables W1 on Pin 6 of the I/-Header of U3 */
+/* Breaks support for I/O shield board */
+#define               GPIO_W1         EXYNOS4_GPX1(5) /* GPIO-PIN 204 */
+
+static struct w1_gpio_platform_data w1_gpio_pdata = {
+       .pin = GPIO_W1,
+       .is_open_drain = 0,
+};
+
+static struct platform_device odroidu3_w1_device = {
+   .name  = "w1-gpio",
+   .id    = -1,
+   .dev.platform_data      = &w1_gpio_pdata,
+};
+#endif
+
+#if defined(CONFIG_GPIO_PCA953X)
+static struct pca953x_platform_data odroid_gpio_expander_pdata = {
+	.gpio_base	= EXYNOS4_GPIO_END,
+};
+#endif
+
+static struct i2c_board_info hkdk4412_i2c_devs4[] __initdata = {
+#if defined(CONFIG_SENSORS_BH1780)
+	{
+		I2C_BOARD_INFO("bh1780", 0x29),
+	},
+#endif
+#if defined(CONFIG_GPIO_PCA953X)
+	{
+		I2C_BOARD_INFO("tca6416", 0x20),
+		.platform_data 	= &odroid_gpio_expander_pdata,
+	},
+#endif
+};
+#endif
 
 #if defined(CONFIG_ODROID_U2)
 static struct gpio_led hkdk4412_gpio_leds[] = {
@@ -195,33 +303,26 @@ static struct platform_pwm_backlight_data hkdk4412_bl_data = {
 	.pwm_period_ns	= 1000,
 };
 
-#if defined(CONFIG_LCD_LP101WH1)
-static struct s3c_fb_pd_win hkdk4412_fb_win0 = {
-	.max_bpp	= 32,
-	.default_bpp	= 24,
-	.xres		= 1360,
-	.yres		= 768,
-};
-
-static struct fb_videomode hkdk4412_lcd_timing = {
-	.left_margin	= 80,
-	.right_margin	= 48,
-	.upper_margin	= 14,
-	.lower_margin	= 3,
-	.hsync_len	= 32,
-	.vsync_len	= 5,
-	.xres		= 1360,
-	.yres		= 768,
-};
-
-static struct s3c_fb_platdata hkdk4412_fb_pdata __initdata = {
-	.win[0]		= &hkdk4412_fb_win0,
-	.vtiming	= &hkdk4412_lcd_timing,
+#if defined(CONFIG_LCD_LP101WH1) && defined(CONFIG_DRM_EXYNOS_FIMD)
+static struct exynos_drm_fimd_pdata drm_fimd_pdata = {
+	.panel = {
+		.timing = {
+			.left_margin 	= 80,
+			.right_margin 	= 48,
+			.upper_margin 	= 14,
+			.lower_margin 	= 3,
+			.hsync_len 	= 32,
+			.vsync_len 	= 5,
+			.xres 		= 1360,
+			.yres 		= 768,
+		},
+	},
 	.vidcon0	= VIDCON0_VIDOUT_RGB | VIDCON0_PNRMODE_RGB,
-	.vidcon1	= VIDCON1_INV_HSYNC | VIDCON1_INV_VSYNC,
-	.setup_gpio	= exynos4_fimd0_gpio_setup_24bpp,
+	.vidcon1	= VIDCON1_INV_HSYNC | VIDCON1_INV_VSYNC | VIDCON1_INV_VCLK,
+	.default_win 	= 0,
+	.bpp 		= 32,
 };
-
+	
 static void lcd_lp101wh1_set_power(struct plat_lcd_data *pd,
 				   unsigned int power)
 {
@@ -241,7 +342,7 @@ static struct platform_device hkdk4412_lcd_lp101wh1 = {
 		.platform_data	= &hkdk4412_lcd_lp101wh1_data,
 	},
 };
-#endif
+#endif // LCD
 
 /* GPIO KEYS */
 static struct gpio_keys_button hkdk4412_gpio_keys_tables[] = {
@@ -279,7 +380,7 @@ static struct platform_device hkdk4412_gpio_keys = {
 
 #if defined(CONFIG_SND_SOC_HKDK_MAX98090)
 static struct platform_device hardkernel_audio_device = {
-	.name	= "hkdk-snd-max89090",
+	.name	= "hkdk-snd-max98090",
 	.id	= -1,
 };
 #endif
@@ -307,12 +408,60 @@ static void __init hkdk4412_ohci_init(void)
 /* USB OTG */
 static struct s3c_hsotg_plat hkdk4412_hsotg_pdata;
 
+#ifdef CONFIG_USB_EXYNOS_SWITCH
+static struct s5p_usbswitch_platdata hkdk4412_usbswitch_pdata;
+
+static void __init hkdk4412_usbswitch_init(void)
+{
+	struct s5p_usbswitch_platdata *pdata = &hkdk4412_usbswitch_pdata;
+	int err;
+
+	pdata->gpio_host_detect = EXYNOS4_GPX3(1); /* low active */
+	err = gpio_request_one(pdata->gpio_host_detect, GPIOF_IN, "HOST_DETECT");
+	if (err) {
+		printk(KERN_ERR "failed to request gpio_host_detect\n");
+		return;
+	}
+
+	s3c_gpio_cfgpin(pdata->gpio_host_detect, S3C_GPIO_SFN(0xF));
+	s3c_gpio_setpull(pdata->gpio_host_detect, S3C_GPIO_PULL_UP);
+	gpio_free(pdata->gpio_host_detect);
+
+	pdata->gpio_device_detect = EXYNOS4_GPX1(6); /* high active */
+	err = gpio_request_one(pdata->gpio_device_detect, GPIOF_IN, "DEVICE_DETECT");
+	if (err) {
+		printk(KERN_ERR "failed to request gpio_host_detect for\n");
+		return;
+	}
+
+	s3c_gpio_cfgpin(pdata->gpio_device_detect, S3C_GPIO_SFN(0xF));
+	s3c_gpio_setpull(pdata->gpio_device_detect, S3C_GPIO_PULL_DOWN);
+	gpio_free(pdata->gpio_device_detect);
+
+	pdata->gpio_host_vbus = EXYNOS4_GPL2(0);
+	err = gpio_request_one(pdata->gpio_host_vbus, GPIOF_OUT_INIT_LOW, "HOST_VBUS_CONTROL");
+	if (err) {
+		printk(KERN_ERR "failed to request gpio_host_vbus\n");
+		return;
+	}
+
+	s3c_gpio_setpull(pdata->gpio_host_vbus, S3C_GPIO_PULL_NONE);
+	gpio_free(pdata->gpio_host_vbus);
+
+	pdata->ohci_dev = &exynos4_device_ohci.dev;
+	pdata->ehci_dev = &s5p_device_ehci.dev;
+	pdata->s3c_hsotg_dev = &s3c_device_usb_hsotg.dev;
+
+	s5p_usbswitch_set_platdata(pdata);
+}
+#endif
+
 /* SDCARD */
 static struct s3c_sdhci_platdata hkdk4412_hsmmc2_pdata __initdata = {
 	.max_width	= 4,
 	.host_caps	= MMC_CAP_4_BIT_DATA |
 			MMC_CAP_MMC_HIGHSPEED | MMC_CAP_SD_HIGHSPEED,
-	.cd_type	= S3C_SDHCI_CD_INTERNAL,
+	.cd_type	= S3C_SDHCI_CD_NONE,
 };
 
 /* DWMMC */
@@ -327,21 +476,21 @@ static int hkdk4412_dwmci_init(u32 slot_id, irq_handler_t handler, void *data)
 }
 
 static struct dw_mci_board hkdk4412_dwmci_pdata = {
-       .num_slots              = 1,
-       .quirks                 = DW_MCI_QUIRK_BROKEN_CARD_DETECTION | DW_MCI_QUIRK_HIGHSPEED,
-       .caps		       = MMC_CAP_UHS_DDR50 | MMC_CAP_1_8V_DDR | MMC_CAP_8_BIT_DATA | MMC_CAP_CMD23,
-       .fifo_depth	       = 0x80,
-       .bus_hz                 = 100 * 1000 * 1000,
-       .detect_delay_ms        = 200,
-       .init                   = hkdk4412_dwmci_init,
-       .get_bus_wd             = hkdk4412_dwmci_get_bus_wd,
-       .cfg_gpio	       = exynos4_setup_dwmci_cfg_gpio,
+	.num_slots			= 1,
+	.quirks				= DW_MCI_QUIRK_BROKEN_CARD_DETECTION | DW_MCI_QUIRK_HIGHSPEED,
+	.caps				= MMC_CAP_UHS_DDR50 | MMC_CAP_1_8V_DDR | MMC_CAP_8_BIT_DATA | MMC_CAP_CMD23,
+	.fifo_depth			= 0x80,
+	.bus_hz				= 104 * 1000 * 1000,
+	.detect_delay_ms	= 200,
+	.init				= hkdk4412_dwmci_init,
+	.get_bus_wd			= hkdk4412_dwmci_get_bus_wd,
+	.cfg_gpio			= exynos4_setup_dwmci_cfg_gpio,
 };
 
 static struct resource tmu_resource[] = {
 	[0] = {
 		.start = EXYNOS4_PA_TMU,
-		.end = EXYNOS4_PA_TMU + 0xFFFF - 1,
+		.end = EXYNOS4_PA_TMU + 0x0100,
 		.flags = IORESOURCE_MEM,
 	},
 	[1] = { 
@@ -366,7 +515,8 @@ struct odroid_fan_platform_data odroid_fan_pdata = {
 
         .pwm_id = 0,
         .pwm_periode_ns = 20972,        // Freq 22KHz,
-        .pwm_duty = 255,                                // max=255, 
+        .pwm_duty = 255,                // max=255,
+        .pwm_start_temp = 50,           // default 50,
 };
 
 static struct platform_device odroid_fan = {
@@ -376,11 +526,39 @@ static struct platform_device odroid_fan = {
 };
 #endif
 
+// SPI1
+static struct s3c64xx_spi_csinfo spi1_csi = {
+		.fb_delay = 0x2,
+		.line = EXYNOS4_GPB(5),
+};
+
+static struct spi_board_info spi1_board_info[] __initdata = {
+	[0] = {
+		.modalias = "spidev",
+		.max_speed_hz = 40 * 1000 * 1000, // 10 mhz
+		.bus_num = 1,
+		.chip_select = 0,
+		.mode = SPI_MODE_3,
+		.controller_data = &spi1_csi,
+	},
+};
+
+#if defined(CONFIG_ODROID_IOBOARD)
+static struct platform_device odroid_ioboard_spi = {
+	.name			= "spidev",
+	.id 			= -1,
+};
+#endif
+
 static struct platform_device *hkdk4412_devices[] __initdata = {
 	&s3c_device_hsmmc2,
 	&s3c_device_i2c0,
 	&s3c_device_i2c1,
+	&gpio_device_i2c2,
 	&s3c_device_i2c3,
+#if defined(CONFIG_W1_MASTER_GPIO) || defined(CONFIG_W1_MASTER_GPIO_MODULE)
+        &odroidu3_w1_device,
+#endif
 	&s3c_device_i2c7,
 	&s3c_device_rtc,
 	&s3c_device_usb_hsotg,
@@ -399,6 +577,7 @@ static struct platform_device *hkdk4412_devices[] __initdata = {
 	&s5p_device_mfc_l,
 	&s5p_device_mfc_r,
 	&s5p_device_g2d,
+	&s5p_device_jpeg,
 	&mali_gpu_device,
 #if defined(CONFIG_S5P_DEV_TV)
 	&s5p_device_hdmi,
@@ -410,7 +589,7 @@ static struct platform_device *hkdk4412_devices[] __initdata = {
 	&exynos4_device_ohci,
 	&exynos_device_dwmci,
 	&hkdk4412_leds_gpio,
-#if defined(CONFIG_LCD_LP101WH1)
+#if defined(CONFIG_LCD_LP101WH1) && !defined(CONFIG_ODROID_U2) && defined(CONFIG_DRM_EXYNOS_FIMD)
 	&hkdk4412_lcd_lp101wh1,
 #endif
 	&hkdk4412_gpio_keys,
@@ -424,6 +603,13 @@ static struct platform_device *hkdk4412_devices[] __initdata = {
 #if defined(CONFIG_ODROID_U2_FAN)
 	&s3c_device_timer[0],
 	&odroid_fan,
+#endif
+	&s3c64xx_device_spi1,
+#if defined(CONFIG_ODROID_IOBOARD)
+	&odroid_ioboard_spi,
+#endif
+#if defined(CONFIG_USB_EXYNOS_SWITCH)
+	&s5p_device_usbswitch,
 #endif
 };
 
@@ -448,17 +634,9 @@ static void __init hkdk4412_reserve(void)
 }
 
 #if defined(CONFIG_S5P_DEV_TV)
-static void s5p_tv_setup(void)
-{
-	/* Direct HPD to HDMI chip */
-	gpio_request_one(EXYNOS4_GPX3(7), GPIOF_IN, "hpd-plug");
-	s3c_gpio_cfgpin(EXYNOS4_GPX3(7), S3C_GPIO_SFN(0x3));
-	s3c_gpio_setpull(EXYNOS4_GPX3(7), S3C_GPIO_PULL_NONE);
-}
-
 /* I2C module and id for HDMIPHY */
 static struct i2c_board_info hdmiphy_info = {
-	I2C_BOARD_INFO("hdmiphy-exynos4412", 0x38),
+	I2C_BOARD_INFO("s5p_hdmiphy", 0x38),
 };
 #endif
 
@@ -496,7 +674,7 @@ static int hkdk4412_reboot_notifier(struct notifier_block *this, unsigned long c
         msleep(150);
         gpio_direction_output(EXYNOS4_GPK1(2), 1);
         gpio_free(EXYNOS4_GPK1(2));
-	msleep(150);
+	msleep(500);
         return NOTIFY_DONE;
 }	
 
@@ -520,9 +698,17 @@ static void __init hkdk4412_machine_init(void)
 	i2c_register_board_info(1, hkdk4412_i2c_devs1,
 				ARRAY_SIZE(hkdk4412_i2c_devs1));
 
+	i2c_register_board_info(2, hkdk4412_i2c_devs2,
+				ARRAY_SIZE(hkdk4412_i2c_devs2));
+
 	s3c_i2c3_set_platdata(NULL);
 	i2c_register_board_info(3, hkdk4412_i2c_devs3,
 				ARRAY_SIZE(hkdk4412_i2c_devs3));
+
+#if defined(CONFIG_ODROID_U2)
+	i2c_register_board_info(4, hkdk4412_i2c_devs4,
+				ARRAY_SIZE(hkdk4412_i2c_devs4));
+#endif
 
 	s3c_i2c7_set_platdata(NULL);
 	i2c_register_board_info(7, hkdk4412_i2c_devs7,
@@ -536,16 +722,27 @@ static void __init hkdk4412_machine_init(void)
 	hkdk4412_ehci_init();
 	hkdk4412_ohci_init();
 	s3c_hsotg_set_platdata(&hkdk4412_hsotg_pdata);
-
-#if defined(CONFIG_S5P_DEV_TV)
-	s5p_tv_setup();
-	s5p_i2c_hdmiphy_set_platdata(NULL);
-	s5p_hdmi_set_platdata(&hdmiphy_info, NULL, 0);
-	s5p_hdmi_cec_set_platdata(&hdmi_cec_data);
+#ifdef CONFIG_USB_EXYNOS_SWITCH
+	hkdk4412_usbswitch_init();
 #endif
 
-	s5p_fimd0_set_platdata(&hkdk4412_fb_pdata);
+	s3c64xx_spi1_set_platdata(NULL, 0, 1);
+	spi_register_board_info(spi1_board_info, ARRAY_SIZE(spi1_board_info));
 
+#if defined(CONFIG_S5P_DEV_TV)
+	s5p_i2c_hdmiphy_set_platdata(NULL);
+	s5p_hdmi_set_platdata(&hdmiphy_info, NULL, 0, EXYNOS4_GPX3(7));
+	s5p_hdmi_cec_set_platdata(&hdmi_cec_data);
+	/* FIXME: hdmiphy i2c adapter has dynamic ID, and setting it to 8 causes
+	 * a failure to initialize (can't find clock?). so for now we are relying
+	 * on the hdmiphy i2c adapter being dynamically assigned address 8. */
+	i2c_register_board_info(8, &hdmiphy_info, 1);
+#endif
+
+#if defined(CONFIG_LCD_LP101WH1) && !defined(CONFIG_ODROID_U2) && defined(CONFIG_DRM_EXYNOS_FIMD)
+	s5p_device_fimd0.dev.platform_data = &drm_fimd_pdata;
+	exynos4_fimd0_gpio_setup_24bpp();
+#endif
 	platform_add_devices(hkdk4412_devices, ARRAY_SIZE(hkdk4412_devices));
 
 	samsung_bl_set(&hkdk4412_bl_gpio_info, &hkdk4412_bl_data);
@@ -558,7 +755,7 @@ MACHINE_START(ODROIDX, "ODROIDX")
 #elif defined(CONFIG_ODROID_X2)
 MACHINE_START(ODROIDX, "ODROIDX2")
 #elif defined(CONFIG_ODROID_U2)
-MACHINE_START(ODROIDX, "ODROIDU2")
+MACHINE_START(ODROIDX, "ODROID-U2/U3")
 #endif
 	/* Maintainer: Dongjin Kim <dongjin.kim@agreeyamobiity.net> */
 	.atag_offset	= 0x100,

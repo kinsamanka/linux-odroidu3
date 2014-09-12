@@ -100,7 +100,7 @@ static int stop_streaming(struct vb2_queue *q)
 
 static void fimc_device_run(void *priv)
 {
-	struct vb2_buffer *vb = NULL;
+	struct vb2_buffer *src_vb, *dst_vb;
 	struct fimc_ctx *ctx = priv;
 	struct fimc_frame *sf, *df;
 	struct fimc_dev *fimc;
@@ -123,15 +123,17 @@ static void fimc_device_run(void *priv)
 		fimc_prepare_dma_offset(ctx, df);
 	}
 
-	vb = v4l2_m2m_next_src_buf(ctx->m2m_ctx);
-	ret = fimc_prepare_addr(ctx, vb, sf, &sf->paddr);
+	src_vb = v4l2_m2m_next_src_buf(ctx->m2m_ctx);
+	ret = fimc_prepare_addr(ctx, src_vb, sf, &sf->paddr);
 	if (ret)
 		goto dma_unlock;
 
-	vb = v4l2_m2m_next_dst_buf(ctx->m2m_ctx);
-	ret = fimc_prepare_addr(ctx, vb, df, &df->paddr);
+	dst_vb = v4l2_m2m_next_dst_buf(ctx->m2m_ctx);
+	ret = fimc_prepare_addr(ctx, dst_vb, df, &df->paddr);
 	if (ret)
 		goto dma_unlock;
+
+	dst_vb->v4l2_buf.timestamp = src_vb->v4l2_buf.timestamp;
 
 	/* Reconfigure hardware if the context has changed. */
 	if (fimc->m2m.ctx != ctx) {
@@ -193,7 +195,7 @@ static int fimc_queue_setup(struct vb2_queue *vq, const struct v4l2_format *fmt,
 
 	*num_planes = f->fmt->memplanes;
 	for (i = 0; i < f->fmt->memplanes; i++) {
-		sizes[i] = (f->f_width * f->f_height * f->fmt->depth[i]) / 8;
+		sizes[i] = f->payload[i];
 		allocators[i] = ctx->fimc_dev->alloc_ctx;
 	}
 	return 0;
@@ -388,9 +390,9 @@ static int fimc_m2m_s_fmt_mplane(struct file *file, void *fh,
 	/* Update RGB Alpha control state and value range */
 	fimc_alpha_ctrl_update(ctx);
 
-	for (i = 0; i < frame->fmt->colplanes; i++) {
-		frame->payload[i] =
-			(pix->width * pix->height * frame->fmt->depth[i]) / 8;
+	for (i = 0; i < frame->fmt->memplanes; i++) {
+		struct v4l2_plane_pix_format *plane_fmt = &pix->plane_fmt[i];
+		frame->payload[i] = plane_fmt->sizeimage;
 	}
 
 	fimc_fill_frame(frame, f);
@@ -536,7 +538,7 @@ static int fimc_m2m_try_crop(struct fimc_ctx *ctx, struct v4l2_crop *cr)
 	else
 		halign = ffs(fimc->variant->min_vsize_align) - 1;
 
-	for (i = 0; i < f->fmt->colplanes; i++)
+	for (i = 0; i < f->fmt->memplanes; i++)
 		depth += f->fmt->depth[i];
 
 	v4l_bound_align_image(&cr->c.width, min_size, f->o_width,
@@ -819,7 +821,7 @@ int fimc_register_m2m_device(struct fimc_dev *fimc,
 	if (ret)
 		goto err_me;
 
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 10);
 	if (ret)
 		goto err_vd;
 

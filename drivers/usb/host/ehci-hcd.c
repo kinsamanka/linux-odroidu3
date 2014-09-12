@@ -368,6 +368,24 @@ static void ehci_shutdown(struct usb_hcd *hcd)
 	hrtimer_cancel(&ehci->hrtimer);
 }
 
+static void ehci_port_power (struct ehci_hcd *ehci, int is_on)
+{
+	unsigned port;
+
+	if (!HCS_PPC (ehci->hcs_params))
+		return;
+
+	ehci_dbg (ehci, "...power%s ports...\n", is_on ? "up" : "down");
+	for (port = HCS_N_PORTS (ehci->hcs_params); port > 0; )
+		(void) ehci_hub_control(ehci_to_hcd(ehci),
+				is_on ? SetPortFeature : ClearPortFeature,
+				USB_PORT_FEAT_POWER,
+				port--, NULL, 0);
+	/* Flush those writes */
+	ehci_readl(ehci, &ehci->regs->command);
+	msleep(20);
+}
+
 /*-------------------------------------------------------------------------*/
 
 /*
@@ -669,6 +687,9 @@ int ehci_setup(struct usb_hcd *hcd)
 	retval = ehci_halt(ehci);
 	if (retval)
 		return retval;
+
+	if (ehci_is_TDI(ehci))
+		tdi_reset(ehci);
 
 	ehci_reset(ehci);
 

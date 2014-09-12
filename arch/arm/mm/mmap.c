@@ -159,7 +159,7 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
 	}
 
 	info.flags = VM_UNMAPPED_AREA_TOPDOWN;
-	info.low_limit = PAGE_SIZE;
+	info.low_limit = FIRST_USER_ADDRESS;
 
 	if (fcse()) {
 		unsigned long top, bottom, shift;
