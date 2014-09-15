@@ -284,13 +284,13 @@ static void mixer_cfg_scan(struct mixer_context *ctx, unsigned int height)
 				MXR_CFG_SCAN_PROGRASSIVE);
 
 	/* choosing between porper HD and SD mode */
-	if (height == 480)
+	if (height <= 480)
 		val |= MXR_CFG_SCAN_NTSC | MXR_CFG_SCAN_SD;
-	else if (height == 576)
+	else if (height <= 576)
 		val |= MXR_CFG_SCAN_PAL | MXR_CFG_SCAN_SD;
-	else if (height == 720)
+	else if (height <= 720)
 		val |= MXR_CFG_SCAN_HD_720 | MXR_CFG_SCAN_HD;
-	else if (height == 1080)
+	else if (height <= 1080)
 		val |= MXR_CFG_SCAN_HD_1080 | MXR_CFG_SCAN_HD;
 	else
 		val |= MXR_CFG_SCAN_HD_720 | MXR_CFG_SCAN_HD;
@@ -643,12 +643,14 @@ static void mixer_win_reset(struct mixer_context *ctx)
 	/* setting graphical layers */
 	val  = MXR_GRP_CFG_COLOR_KEY_DISABLE; /* no blank key */
 	val |= MXR_GRP_CFG_WIN_BLEND_EN;
-	val |= MXR_GRP_CFG_BLEND_PRE_MUL;
-	val |= MXR_GRP_CFG_PIXEL_BLEND_EN;
 	val |= MXR_GRP_CFG_ALPHA_VAL(0xff); /* non-transparent alpha */
 
-	/* the same configuration for both layers */
+	/* Don't blend layer 0 onto the mixer background */
 	mixer_reg_write(res, MXR_GRAPHIC_CFG(0), val);
+
+	/* Blend layer 1 into layer 0 */
+	val |= MXR_GRP_CFG_BLEND_PRE_MUL;
+	val |= MXR_GRP_CFG_PIXEL_BLEND_EN;
 	mixer_reg_write(res, MXR_GRAPHIC_CFG(1), val);
 
 	/* setting video layers */

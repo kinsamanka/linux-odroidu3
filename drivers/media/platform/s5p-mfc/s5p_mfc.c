@@ -1102,7 +1102,7 @@ static int s5p_mfc_probe(struct platform_device *pdev)
 	vfd->vfl_dir	= VFL_DIR_M2M;
 	snprintf(vfd->name, sizeof(vfd->name), "%s", S5P_MFC_DEC_NAME);
 	dev->vfd_dec	= vfd;
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 0);
+	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 8);
 	if (ret) {
 		v4l2_err(&dev->v4l2_dev, "Failed to register video device\n");
 		video_device_release(vfd);
@@ -1127,7 +1127,7 @@ static int s5p_mfc_probe(struct platform_device *pdev)
 	vfd->vfl_dir	= VFL_DIR_M2M;
 	snprintf(vfd->name, sizeof(vfd->name), "%s", S5P_MFC_ENC_NAME);
 	dev->vfd_enc	= vfd;
-	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 0);
+	ret = video_register_device(vfd, VFL_TYPE_GRABBER, 9);
 	if (ret) {
 		v4l2_err(&dev->v4l2_dev, "Failed to register video device\n");
 		video_device_release(vfd);
@@ -1293,7 +1293,7 @@ static struct s5p_mfc_variant mfc_drvdata_v5 = {
 	.buf_size	= &buf_size_v5,
 	.buf_align	= &mfc_buf_align_v5,
 	.mclk_name	= "sclk_mfc",
-	.fw_name	= "s5p-mfc.fw",
+	.fw_name	= "s5p-mfc/s5p-mfc.fw",
 };
 
 struct s5p_mfc_buf_size_v6 mfc_buf_size_v6 = {
@@ -1320,7 +1320,7 @@ static struct s5p_mfc_variant mfc_drvdata_v6 = {
 	.buf_size	= &buf_size_v6,
 	.buf_align	= &mfc_buf_align_v6,
 	.mclk_name      = "aclk_333",
-	.fw_name        = "s5p-mfc-v6.fw",
+	.fw_name        = "s5p-mfc/s5p-mfc-v6.fw",
 };
 
 static struct platform_device_id mfc_driver_ids[] = {

@@ -507,6 +507,8 @@ static void __init exynos4_timer_resources(void)
 
 	mct_clk = clk_get(NULL, "xtal");
 	clk_rate = clk_get_rate(mct_clk);
+	
+	pr_emerg("MCT clocksource init timer with clk_rate=%d hz\n", clk_rate);
 
 #ifdef CONFIG_LOCAL_TIMERS
 	if (mct_int_type == MCT_INT_PPI) {

@@ -27,6 +27,13 @@ enum exynos_crtc_mode {
 	CRTC_MODE_BLANK,	/* The private plane of crtc is blank */
 };
 
+enum exynos_crtc_underscan {
+	CRTC_UNDERSCAN_AUTO,	/* automatic underscan. unimplmented same as off */
+	CRTC_UNDERSCAN_OFF,	/* underscan disabled */
+	CRTC_UNDERSCAN_ON,	/* underscan scaled mode. unimplemented because of hardware capabilities */
+	CRTC_UNDERSCAN_CROP,	/* underscan on implemented as cropped */
+};
+
 /*
  * Exynos specific crtc structure.
  *
@@ -41,6 +48,9 @@ enum exynos_crtc_mode {
  *	this pipe value.
  * @dpms: store the crtc dpms value
  * @mode: store the crtc mode value
+ * @underscan: The CRTC underscan type
+ * @underscan_hborder: The underscan horizontal border
+ * @underscan_vborder: The underscan vertical border
  */
 struct exynos_drm_crtc {
 	struct drm_crtc			drm_crtc;
@@ -48,6 +58,11 @@ struct exynos_drm_crtc {
 	unsigned int			pipe;
 	unsigned int			dpms;
 	enum exynos_crtc_mode		mode;
+	enum exynos_crtc_underscan	underscan;
+	uint64_t			underscan_hborder;
+	uint64_t			underscan_vborder;
+	wait_queue_head_t		pending_flip_queue;
+	atomic_t			pending_flip;
 };
 
 static void exynos_drm_crtc_dpms(struct drm_crtc *crtc, int mode)
@@ -59,6 +74,13 @@ static void exynos_drm_crtc_dpms(struct drm_crtc *crtc, int mode)
 	if (exynos_crtc->dpms == mode) {
 		DRM_DEBUG_KMS("desired dpms mode is same as previous one.\n");
 		return;
+	}
+
+	if (mode > DRM_MODE_DPMS_ON) {
+		/* wait for the completion of page flip. */
+		wait_event(exynos_crtc->pending_flip_queue,
+				atomic_read(&exynos_crtc->pending_flip) == 0);
+		drm_vblank_off(crtc->dev, exynos_crtc->pipe);
 	}
 
 	exynos_drm_fn_encoder(crtc, &mode, exynos_drm_encoder_crtc_dpms);
@@ -103,6 +125,8 @@ exynos_drm_crtc_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
 	struct drm_plane *plane = exynos_crtc->plane;
 	unsigned int crtc_w;
 	unsigned int crtc_h;
+	unsigned int crtc_uh = 0;
+	unsigned int crtc_uv = 0;
 	int pipe = exynos_crtc->pipe;
 	int ret;
 
@@ -117,8 +141,14 @@ exynos_drm_crtc_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
 	crtc_w = crtc->fb->width - x;
 	crtc_h = crtc->fb->height - y;
 
-	ret = exynos_plane_mode_set(plane, crtc, crtc->fb, 0, 0, crtc_w, crtc_h,
-				    x, y, crtc_w, crtc_h);
+	if (exynos_crtc->underscan == CRTC_UNDERSCAN_CROP) {
+		crtc_uh = exynos_crtc->underscan_hborder;
+		crtc_uv = exynos_crtc->underscan_vborder;
+	}
+
+	ret = exynos_plane_mode_set(plane, crtc, crtc->fb,
+		crtc_uh, crtc_uv, crtc_w, crtc_h,
+		x, y, crtc_w, crtc_h);
 	if (ret)
 		return ret;
 
@@ -137,6 +167,8 @@ static int exynos_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
 	struct drm_plane *plane = exynos_crtc->plane;
 	unsigned int crtc_w;
 	unsigned int crtc_h;
+	unsigned int crtc_uh = 0;
+	unsigned int crtc_uv = 0;
 	int ret;
 
 	DRM_DEBUG_KMS("%s\n", __FILE__);
@@ -150,8 +182,14 @@ static int exynos_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
 	crtc_w = crtc->fb->width - x;
 	crtc_h = crtc->fb->height - y;
 
-	ret = exynos_plane_mode_set(plane, crtc, crtc->fb, 0, 0, crtc_w, crtc_h,
-				    x, y, crtc_w, crtc_h);
+	if (exynos_crtc->underscan == CRTC_UNDERSCAN_CROP) {
+		crtc_uh = exynos_crtc->underscan_hborder;
+		crtc_uv = exynos_crtc->underscan_vborder;
+	}
+
+	ret = exynos_plane_mode_set(plane, crtc, crtc->fb,
+		crtc_uh, crtc_uv, crtc_w, crtc_h,
+		x, y, crtc_w, crtc_h);
 	if (ret)
 		return ret;
 
@@ -199,10 +237,17 @@ static int exynos_drm_crtc_page_flip(struct drm_crtc *crtc,
 
 	DRM_DEBUG_KMS("%s\n", __FILE__);
 
-	/* when the page flip is requested, crtc's dpms should be on */
+	/* if the CRTC is off, just save the new framebuffer address for use if
+	 * we get turned on again later, and report to userspace that the flip
+	 * completed. */
 	if (exynos_crtc->dpms > DRM_MODE_DPMS_ON) {
-		DRM_ERROR("failed page flip request.\n");
-		return -EINVAL;
+		crtc->fb = fb;
+		if (event) {
+			spin_lock_irq(&dev->event_lock);
+			drm_send_vblank_event(dev, -1, event);
+			spin_unlock_irq(&dev->event_lock);
+		}
+		return 0;
 	}
 
 	mutex_lock(&dev->struct_mutex);
@@ -217,7 +262,6 @@ static int exynos_drm_crtc_page_flip(struct drm_crtc *crtc,
 		ret = drm_vblank_get(dev, exynos_crtc->pipe);
 		if (ret) {
 			DRM_DEBUG("failed to acquire vblank counter\n");
-			list_del(&event->base.link);
 
 			goto out;
 		}
@@ -225,6 +269,7 @@ static int exynos_drm_crtc_page_flip(struct drm_crtc *crtc,
 		spin_lock_irq(&dev->event_lock);
 		list_add_tail(&event->base.link,
 				&dev_priv->pageflip_event_list);
+		atomic_set(&exynos_crtc->pending_flip, 1);
 		spin_unlock_irq(&dev->event_lock);
 
 		crtc->fb = fb;
@@ -290,6 +335,23 @@ static int exynos_drm_crtc_set_property(struct drm_crtc *crtc,
 		}
 
 		return 0;
+	} else if (property == dev_priv->crtc_underscan_property) {
+		enum exynos_crtc_underscan underscan = val;
+
+		if (underscan == exynos_crtc->underscan)
+			return 0;
+
+		exynos_crtc->underscan = underscan;
+
+		return 0;
+	} else if (property == dev_priv->crtc_underscan_hborder_property) {
+		exynos_crtc->underscan_hborder = val;
+
+		return 0;
+	} else if (property == dev_priv->crtc_underscan_vborder_property) {
+		exynos_crtc->underscan_vborder = val;
+
+		return 0;
 	}
 
 	return -EINVAL;
@@ -328,6 +390,59 @@ static void exynos_drm_crtc_attach_mode_property(struct drm_crtc *crtc)
 	drm_object_attach_property(&crtc->base, prop, 0);
 }
 
+static const struct drm_prop_enum_list underscan_names[] = {
+	{ CRTC_UNDERSCAN_AUTO, "auto" },
+	{ CRTC_UNDERSCAN_OFF, "off" },
+	{ CRTC_UNDERSCAN_CROP, "crop" },
+};
+
+static void exynos_drm_crtc_attach_underscan_property(struct drm_crtc *crtc)
+{
+	struct drm_device *dev = crtc->dev;
+	struct exynos_drm_private *dev_priv = dev->dev_private;
+	struct drm_property *prop;
+
+	DRM_DEBUG_KMS("%s\n", __func__);
+
+	prop = dev_priv->crtc_underscan_property;
+	if (!prop) {
+		prop = drm_property_create_enum(dev, 0, "underscan",
+			underscan_names, ARRAY_SIZE(underscan_names));
+		if (!prop)
+			return;
+
+		dev_priv->crtc_underscan_property = prop;
+	}
+
+	drm_object_attach_property(&crtc->base, prop, 0);
+
+
+	prop = dev_priv->crtc_underscan_hborder_property;
+	if (!prop) {
+		prop = drm_property_create_range(dev, 0, "underscan hborder",
+			0, 128);
+		if (!prop)
+			return;
+
+		dev_priv->crtc_underscan_hborder_property = prop;
+        }
+
+	drm_object_attach_property(&crtc->base, prop, 0);
+
+
+	prop = dev_priv->crtc_underscan_vborder_property;
+	if (!prop) {
+		prop = drm_property_create_range(dev, 0, "underscan vborder",
+			0, 128);
+		if (!prop)
+			return;
+
+		dev_priv->crtc_underscan_vborder_property = prop;
+        }
+
+	drm_object_attach_property(&crtc->base, prop, 0);
+}
+
 int exynos_drm_crtc_create(struct drm_device *dev, unsigned int nr)
 {
 	struct exynos_drm_crtc *exynos_crtc;
@@ -344,6 +459,8 @@ int exynos_drm_crtc_create(struct drm_device *dev, unsigned int nr)
 
 	exynos_crtc->pipe = nr;
 	exynos_crtc->dpms = DRM_MODE_DPMS_OFF;
+	init_waitqueue_head(&exynos_crtc->pending_flip_queue);
+	atomic_set(&exynos_crtc->pending_flip, 0);
 	exynos_crtc->plane = exynos_plane_init(dev, 1 << nr, true);
 	if (!exynos_crtc->plane) {
 		kfree(exynos_crtc);
@@ -358,6 +475,8 @@ int exynos_drm_crtc_create(struct drm_device *dev, unsigned int nr)
 	drm_crtc_helper_add(crtc, &exynos_crtc_helper_funcs);
 
 	exynos_drm_crtc_attach_mode_property(crtc);
+
+	exynos_drm_crtc_attach_underscan_property(crtc);
 
 	return 0;
 }
@@ -398,7 +517,8 @@ void exynos_drm_crtc_finish_pageflip(struct drm_device *dev, int crtc)
 {
 	struct exynos_drm_private *dev_priv = dev->dev_private;
 	struct drm_pending_vblank_event *e, *t;
-	struct timeval now;
+	struct drm_crtc *drm_crtc = dev_priv->crtc[crtc];
+	struct exynos_drm_crtc *exynos_crtc = to_exynos_crtc(drm_crtc);
 	unsigned long flags;
 
 	DRM_DEBUG_KMS("%s\n", __FILE__);
@@ -411,14 +531,11 @@ void exynos_drm_crtc_finish_pageflip(struct drm_device *dev, int crtc)
 		if (crtc != e->pipe)
 			continue;
 
-		do_gettimeofday(&now);
-		e->event.sequence = 0;
-		e->event.tv_sec = now.tv_sec;
-		e->event.tv_usec = now.tv_usec;
-
-		list_move_tail(&e->base.link, &e->base.file_priv->event_list);
-		wake_up_interruptible(&e->base.file_priv->event_wait);
+		list_del(&e->base.link);
+		drm_send_vblank_event(dev, -1, e);
 		drm_vblank_put(dev, crtc);
+		atomic_set(&exynos_crtc->pending_flip, 0);
+		wake_up(&exynos_crtc->pending_flip_queue);
 	}
 
 	spin_unlock_irqrestore(&dev->event_lock, flags);
