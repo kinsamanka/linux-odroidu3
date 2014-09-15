@@ -149,3 +149,5 @@ obj-$(CONFIG_IPACK_BUS)		+= ipack/
 
 #hardkernel
 obj-y				+= hardkernel/
+
+obj-$(CONFIG_XENOMAI) += xenomai/
