@@ -39,7 +39,7 @@
 	coherency-fabric@d0020200 {
 		compatible = "marvell,coherency-fabric";
 		reg = <0xd0020200 0xb0>,
-		      <0xd0021810 0x1c>;
+		      <0xd0021010 0x1c>;
 	};
 
 	soc {
@@ -79,8 +79,8 @@
 		};
 
 		sata@d00a0000 {
-			compatible = "marvell,orion-sata";
-			reg = <0xd00a0000 0x2400>;
+			compatible = "marvell,armada-370-sata";
+			reg = <0xd00a0000 0x5000>;
 			interrupts = <55>;
 			clocks = <&gateclk 15>, <&gateclk 30>;
 			clock-names = "0", "1";
