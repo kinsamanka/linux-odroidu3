@@ -23,6 +23,7 @@
 #include <linux/export.h>
 #include <linux/irqdomain.h>
 #include <linux/of_address.h>
+#include <linux/ipipe.h>
 
 #include <asm/proc-fns.h>
 #include <asm/exception.h>
@@ -490,7 +491,7 @@ static void __init exynos5_init_clocks(int xtal)
 #define COMBINER_ENABLE_CLEAR	0x4
 #define COMBINER_INT_STATUS	0xC
 
-static DEFINE_SPINLOCK(irq_controller_lock);
+static IPIPE_DEFINE_SPINLOCK(irq_controller_lock);
 
 struct combiner_chip_data {
 	unsigned int irq_offset;
@@ -546,7 +547,7 @@ static void combiner_handle_cascade_irq(unsigned int irq, struct irq_desc *desc)
 	if (unlikely(cascade_irq >= NR_IRQS))
 		do_bad_IRQ(cascade_irq, desc);
 	else
-		generic_handle_irq(cascade_irq);
+		ipipe_handle_demuxed_irq(cascade_irq);
 
  out:
 	chained_irq_exit(chip, desc);
@@ -840,7 +841,7 @@ static void __init exynos4_init_uarts(struct s3c2410_uartcfg *cfg, int no)
 
 static void __iomem *exynos_eint_base;
 
-static DEFINE_SPINLOCK(eint_lock);
+static IPIPE_DEFINE_SPINLOCK(eint_lock);
 
 static unsigned int eint0_15_data[16];
 
@@ -1047,7 +1048,7 @@ static inline void exynos_irq_demux_eint(unsigned int start)
 
 	while (status) {
 		irq = fls(status) - 1;
-		generic_handle_irq(irq + start);
+		ipipe_handle_demuxed_irq(irq + start);
 		status &= ~(1 << irq);
 	}
 }
@@ -1067,7 +1068,7 @@ static void exynos_irq_eint0_15(unsigned int irq, struct irq_desc *desc)
 	struct irq_chip *chip = irq_get_chip(irq);
 
 	chained_irq_enter(chip, desc);
-	generic_handle_irq(*irq_data);
+	ipipe_handle_demuxed_irq(*irq_data);
 	chained_irq_exit(chip, desc);
 }
 
