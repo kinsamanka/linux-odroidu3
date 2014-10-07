@@ -47,11 +47,6 @@
 #include <asm/irq.h>
 #include <asm/traps.h>
 
-#define FIQ_OFFSET ({					\
-		extern void *vector_fiq_offset;		\
-		(unsigned)&vector_fiq_offset;		\
-	})
-
 static unsigned long no_fiq_insn;
 
 /* Default reacquire function
@@ -148,7 +143,6 @@ EXPORT_SYMBOL(disable_fiq);
 
 void __init init_FIQ(int start)
 {
-	unsigned offset = FIQ_OFFSET;
-	no_fiq_insn = *(unsigned long *)(0xffff0000 + offset);
+	no_fiq_insn = *(unsigned long *)0xffff001c;
 	fiq_start = start;
 }
