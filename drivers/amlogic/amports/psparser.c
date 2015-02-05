@@ -96,8 +96,8 @@ static unsigned first_apts, first_vpts;
 static unsigned audio_got_first_pts, video_got_first_dts, sub_got_first_pts;
 atomic_t sub_block_found = ATOMIC_INIT(0);
 
-static DEFINE_SPINLOCK(audio_reset_lock);
-static DEFINE_SPINLOCK(sub_reset_lock);
+static DEFINE_SPINLOCK(psparser_audio_reset_lock);
+static DEFINE_SPINLOCK(psparser_sub_reset_lock);
 
 #define DEBUG_VOB_SUB
 #ifdef DEBUG_VOB_SUB
@@ -1002,7 +1002,7 @@ void psparser_audio_reset(void)
 {
     ulong flags;
 
-    spin_lock_irqsave(&audio_reset_lock, flags);
+    spin_lock_irqsave(&psparser_audio_reset_lock, flags);
 
     WRITE_MPEG_REG(PARSER_AUDIO_WP,
                    READ_MPEG_REG(AIU_MEM_AIFIFO_START_PTR));
@@ -1020,7 +1020,7 @@ void psparser_audio_reset(void)
 
     audio_data_parsed = 0;
 
-    spin_unlock_irqrestore(&audio_reset_lock, flags);
+    spin_unlock_irqrestore(&psparser_audio_reset_lock, flags);
 
     return;
 }
@@ -1032,7 +1032,7 @@ void psparser_sub_reset(void)
     u32 parser_sub_start_ptr;
     u32 parser_sub_end_ptr;
 
-    spin_lock_irqsave(&sub_reset_lock, flags);
+    spin_lock_irqsave(&psparser_sub_reset_lock, flags);
 
     parser_sub_start_ptr = READ_MPEG_REG(PARSER_SUB_START_PTR);
     parser_sub_end_ptr = READ_MPEG_REG(PARSER_SUB_END_PTR);
@@ -1043,7 +1043,7 @@ void psparser_sub_reset(void)
     WRITE_MPEG_REG(PARSER_SUB_WP, parser_sub_start_ptr);
     SET_MPEG_REG_MASK(PARSER_ES_CONTROL, (7 << ES_SUB_WR_ENDIAN_BIT) | ES_SUB_MAN_RD_PTR);
 
-    spin_unlock_irqrestore(&sub_reset_lock, flags);
+    spin_unlock_irqrestore(&psparser_sub_reset_lock, flags);
 
     return;
 }
