@@ -43,7 +43,7 @@ create_package() {
 	mips*)
 		debarch=mips$(grep -q CPU_LITTLE_ENDIAN=y .config && echo el) ;;
 	arm*)
-		debarch=arm$(grep -q CONFIG_AEABI=y .config && echo el) ;;
+		debarch=arm$(grep -q CONFIG_AEABI=y .config && echo hf) ;;
 	*)
 		echo "" >&2
 		echo "** ** **  WARNING  ** ** **" >&2
@@ -116,7 +116,7 @@ else
 	if [ -e $KBUILD_IMAGE ]; then
 		cp $KBUILD_IMAGE "$tmpdir/boot/vmlinuz-$version"
 	else
-		cp arch/$ARCH/boot/$KBUILD_IMAGE "$tmpdir/boot/vmlinuz-$version"
+		cp arch/$ARCH/boot/$KBUILD_IMAGE "$tmpdir/boot/$KBUILD_IMAGE-$version"
 	fi
 fi
 
@@ -232,7 +232,7 @@ else
 	cat <<EOF >> debian/control
 
 Package: $packagename
-Provides: linux-image, linux-image-2.6, linux-modules-$version
+Provides: linux-image, linux-image-2.6, linux-modules-$version, linux-image-rt
 Suggests: $fwpackagename
 Architecture: any
 Description: Linux kernel, version $version
