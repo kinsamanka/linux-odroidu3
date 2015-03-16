@@ -121,7 +121,7 @@ else
 fi
 
 # copy dtb file
-if [ -e arch/$ARCH/boot/dts/$BOARD_DTB ]; then
+if [ -f arch/$ARCH/boot/dts/$BOARD_DTB ]; then
 	cp arch/$ARCH/boot/dts/$BOARD_DTB \
 		"$tmpdir/boot/$BOARD_DTB-$version"
 fi
