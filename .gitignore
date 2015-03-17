@@ -93,3 +93,5 @@ x509.genkey
 
 # customer folder
 customer
+arch/arm/boot/ccImage
+dist

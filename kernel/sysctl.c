@@ -277,11 +277,13 @@ static int min_extfrag_threshold;
 static int max_extfrag_threshold = 1000;
 #endif
 
+/*
 #if MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8
 #ifdef CONFIG_MESON_SUSPEND
 extern unsigned int arc_serial_disable;
 #endif
 #endif
+*/
 static struct ctl_table kern_table[] = {
 	{
 		.procname	= "sched_child_runs_first",
@@ -1073,6 +1075,7 @@ static struct ctl_table kern_table[] = {
 		.proc_handler	= proc_dointvec,
 	},
 #endif
+/*
 #if MESON_CPU_TYPE >= MESON_CPU_TYPE_MESON8
 #ifdef CONFIG_MESON_SUSPEND
 	{
@@ -1084,6 +1087,7 @@ static struct ctl_table kern_table[] = {
 	},
 #endif
 #endif
+*/
 	{ }
 };
 
