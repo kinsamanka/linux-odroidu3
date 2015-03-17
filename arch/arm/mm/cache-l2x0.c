@@ -22,6 +22,7 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
+#include <linux/ipipe.h>
 
 #include <asm/cacheflush.h>
 #include <asm/hardware/cache-l2x0.h>
@@ -34,16 +35,22 @@
 #endif
 #endif
 
+#ifndef CONFIG_IPIPE
+int l2x0_wa = 1;
+#define SPINLOCK_SECTION_LEN	4096UL
+#else /* CONFIG_IPIPE */
+int l2x0_wa = 0;
+#define SPINLOCK_SECTION_LEN	512UL
+#endif /* CONFIG_IPIPE */
 
 #define CACHE_LINE_SIZE		32
 
 static void __iomem *l2x0_base;
-static DEFINE_RAW_SPINLOCK(l2x0_lock);
+static IPIPE_DEFINE_RAW_SPINLOCK(l2x0_lock);
 static u32 l2x0_way_mask;	/* Bitmask of active ways */
 static u32 l2x0_size;
-static u32 l2x0_cache_id;
-static unsigned int l2x0_sets;
-static unsigned int l2x0_ways;
+static u32 l2x0_ways;
+static u32 l2x0_lines;
 static unsigned long sync_reg_offset = L2X0_CACHE_SYNC;
 
 /* Aurora don't have the cache ID register available, so we have to
@@ -58,14 +65,14 @@ struct l2x0_of_data {
 	struct outer_cache_fns outer_cache;
 };
 
-static bool of_init = false;
-
-static inline bool is_pl310_rev(int rev)
+static int __init l2x0_setup_wa(char *str)
 {
-	return (l2x0_cache_id &
-		(L2X0_CACHE_ID_PART_MASK | L2X0_CACHE_ID_REV_MASK)) ==
-			(L2X0_CACHE_ID_PART_L310 | rev);
+	l2x0_wa = simple_strtol(str, NULL, 0);
+	return 0;
 }
+early_param("l2x0_write_allocate", l2x0_setup_wa);
+
+static bool of_init = false;
 
 static inline void cache_wait_way(void __iomem *reg, unsigned long mask)
 {
@@ -159,23 +166,6 @@ static void l2x0_cache_sync(void)
 	raw_spin_unlock_irqrestore(&l2x0_lock, flags);
 }
 
-#ifdef CONFIG_PL310_ERRATA_727915
-static void l2x0_for_each_set_way(void __iomem *reg)
-{
-	int set;
-	int way;
-	unsigned long flags;
-
-	for (way = 0; way < l2x0_ways; way++) {
-		raw_spin_lock_irqsave(&l2x0_lock, flags);
-		for (set = 0; set < l2x0_sets; set++)
-			writel_relaxed((way << 28) | (set << 5), reg);
-		cache_sync();
-		raw_spin_unlock_irqrestore(&l2x0_lock, flags);
-	}
-}
-#endif
-
 static void __l2x0_flush_all(void)
 {
 	debug_writel(0x03);
@@ -185,33 +175,54 @@ static void __l2x0_flush_all(void)
 	debug_writel(0x00);
 }
 
+#ifndef CONFIG_IPIPE
 static void l2x0_flush_all(void)
 {
 	unsigned long flags;
-
-#ifdef CONFIG_PL310_ERRATA_727915
-	if (is_pl310_rev(REV_PL310_R2P0)) {
-		l2x0_for_each_set_way(l2x0_base + L2X0_CLEAN_INV_LINE_IDX);
-		return;
-	}
-#endif
 
 	/* clean all ways */
 	raw_spin_lock_irqsave(&l2x0_lock, flags);
 	__l2x0_flush_all();
 	raw_spin_unlock_irqrestore(&l2x0_lock, flags);
 }
+#else
+static void l2x0_clean_inv_line_idx(unsigned line, unsigned way)
+{
+	void __iomem *base = l2x0_base;
+
+	writel_relaxed((way << 28) | (line << 5),
+		       base + L2X0_CLEAN_INV_LINE_IDX);
+	cache_wait(base + L2X0_CLEAN_INV_LINE_IDX, 1);
+}
+
+static void l2x0_flush_way(unsigned way, unsigned len, unsigned lines)
+{
+	unsigned long flags;
+	unsigned line, i;
+
+	for (line = 0; line < lines; line += len ) {
+		raw_spin_lock_irqsave(&l2x0_lock, flags);
+		debug_writel(0x03);
+		for (i = 0; i < len && line + i < lines; i++)
+			l2x0_clean_inv_line_idx(line + i, way);
+		cache_sync();
+		debug_writel(0x00);
+		raw_spin_unlock_irqrestore(&l2x0_lock, flags);
+	}
+}
+
+static void l2x0_flush_all(void)
+{
+	unsigned way, len = SPINLOCK_SECTION_LEN / CACHE_LINE_SIZE;
+
+	for (way = 0; way < l2x0_ways; way++)
+		l2x0_flush_way(way, len, l2x0_lines);
+}
+#endif
 
 static void l2x0_clean_all(void)
 {
 	unsigned long flags;
-
-#ifdef CONFIG_PL310_ERRATA_727915
-	if (is_pl310_rev(REV_PL310_R2P0)) {
-		l2x0_for_each_set_way(l2x0_base + L2X0_CLEAN_LINE_IDX);
-		return;
-	}
-#endif
 
 	/* clean all ways */
 	raw_spin_lock_irqsave(&l2x0_lock, flags);
@@ -257,9 +268,12 @@ static void l2x0_inv_range(unsigned long start, unsigned long end)
 		l2x0_flush_line(end);
 		debug_writel(0x00);
 	}
+	raw_spin_unlock_irqrestore(&l2x0_lock, flags);
 
+	raw_spin_lock_irqsave(&l2x0_lock, flags);
 	while (start < end) {
-		unsigned long blk_end = start + min(end - start, 4096UL);
+		unsigned long blk_end =
+			start + min(end - start, SPINLOCK_SECTION_LEN);
 
 		while (start < blk_end) {
 			l2x0_inv_line(start);
@@ -289,7 +303,8 @@ static void l2x0_clean_range(unsigned long start, unsigned long end)
 	raw_spin_lock_irqsave(&l2x0_lock, flags);
 	start &= ~(CACHE_LINE_SIZE - 1);
 	while (start < end) {
-		unsigned long blk_end = start + min(end - start, 4096UL);
+		unsigned long blk_end =
+			start + min(end - start, SPINLOCK_SECTION_LEN);
 
 		while (start < blk_end) {
 			l2x0_clean_line(start);
@@ -319,7 +334,8 @@ static void l2x0_flush_range(unsigned long start, unsigned long end)
 	raw_spin_lock_irqsave(&l2x0_lock, flags);
 	start &= ~(CACHE_LINE_SIZE - 1);
 	while (start < end) {
-		unsigned long blk_end = start + min(end - start, 4096UL);
+		unsigned long blk_end =
+			start + min(end - start, SPINLOCK_SECTION_LEN);
 
 		debug_writel(0x03);
 		while (start < blk_end) {
@@ -382,68 +398,72 @@ static void l2x0_unlock(u32 cache_id)
 
 void __init l2x0_init(void __iomem *base, u32 aux_val, u32 aux_mask)
 {
-	u32 aux,prefetch,power,tag_lan,data_lan;
+	u32 aux;
+	u32 cache_id;
 	u32 way_size = 0;
+	int ways;
 	int way_size_shift = L2X0_WAY_SIZE_SHIFT;
 	const char *type;
 
+	aux_mask &= ~(3 << 23);
+	aux_val &= ~(3 << 23);
+	aux_val |= (!l2x0_wa) << 23;
+
 	l2x0_base = base;
 	if (cache_id_part_number_from_dt)
-		l2x0_cache_id = cache_id_part_number_from_dt;
+		cache_id = cache_id_part_number_from_dt;
 	else
-		l2x0_cache_id = readl_relaxed(l2x0_base + L2X0_CACHE_ID);
+		cache_id = readl_relaxed(l2x0_base + L2X0_CACHE_ID);
 	aux = readl_relaxed(l2x0_base + L2X0_AUX_CTRL);
 
 	aux &= aux_mask;
 	aux |= aux_val;
 
 	/* Determine the number of ways */
-	switch (l2x0_cache_id & L2X0_CACHE_ID_PART_MASK) {
+	switch (cache_id & L2X0_CACHE_ID_PART_MASK) {
 	case L2X0_CACHE_ID_PART_L310:
 		if (aux & (1 << 16))
-			l2x0_ways = 16;
+			ways = 16;
 		else
-			l2x0_ways = 8;
+			ways = 8;
 		type = "L310";
 #ifdef CONFIG_PL310_ERRATA_753970
 		/* Unmapped register. */
 		sync_reg_offset = L2X0_DUMMY_REG;
 #endif
-		//if ((cache_id & L2X0_CACHE_ID_RTL_MASK) <= L2X0_CACHE_ID_RTL_R3P0)
-		if ((l2x0_cache_id & L2X0_CACHE_ID_RTL_MASK) <= L2X0_CACHE_ID_RTL_R3P0)
+		if ((cache_id & L2X0_CACHE_ID_RTL_MASK) <= L2X0_CACHE_ID_RTL_R3P0)
 			outer_cache.set_debug = pl310_set_debug;
 		break;
 	case L2X0_CACHE_ID_PART_L210:
-		l2x0_ways = (aux >> 13) & 0xf;
+		ways = (aux >> 13) & 0xf;
 		type = "L210";
 		break;
 
 	case AURORA_CACHE_ID:
 		sync_reg_offset = AURORA_SYNC_REG;
-		//ways = (aux >> 13) & 0xf;
-		l2x0_ways = (aux >> 13) & 0xf;
-		//ways = 2 << ((ways + 1) >> 2);
-		l2x0_ways = 2 << ((l2x0_ways + 1) >> 2);
+		ways = (aux >> 13) & 0xf;
+		ways = 2 << ((ways + 1) >> 2);
 		way_size_shift = AURORA_WAY_SIZE_SHIFT;
 		type = "Aurora";
 		break;
 	default:
 		/* Assume unknown chips have 8 ways */
-		l2x0_ways = 8;
+		ways = 8;
 		type = "L2x0 series";
 		break;
 	}
 
-	l2x0_way_mask = (1 << l2x0_ways) - 1;
+	l2x0_way_mask = (1 << ways) - 1;
+	l2x0_ways = ways;
 
 	/*
 	 * L2 cache Size =  Way size * Number of ways
 	 */
 	way_size = (aux & L2X0_AUX_CTRL_WAY_SIZE_MASK) >> 17;
-	way_size = SZ_1K << (way_size + way_size_shift);
+	way_size = 1 << (way_size + way_size_shift);
 
-	l2x0_size = l2x0_ways * way_size;
-	l2x0_sets = way_size / CACHE_LINE_SIZE;
+	l2x0_size = ways * way_size * SZ_1K;
+	l2x0_lines = way_size * SZ_1K / CACHE_LINE_SIZE;
 
 	/*
 	 * Check if l2x0 controller is already enabled.
@@ -452,7 +472,7 @@ void __init l2x0_init(void __iomem *base, u32 aux_val, u32 aux_mask)
 	 */
 	if (!(readl_relaxed(l2x0_base + L2X0_CTRL) & L2X0_CTRL_EN)) {
 		/* Make sure that I&D is not locked down when starting */
-		l2x0_unlock(l2x0_cache_id);
+		l2x0_unlock(cache_id);
 
 		/* l2x0 controller is disabled */
 #ifdef CONFIG_MESON_TRUSTZONE
@@ -493,12 +513,8 @@ void __init l2x0_init(void __iomem *base, u32 aux_val, u32 aux_mask)
 	}
 
 	printk(KERN_INFO "%s cache controller enabled\n", type);
-	printk(KERN_INFO "l2x0: %d ways, %d sets, CACHE_ID 0x%08x,  Cache size: %d B\n",
-			l2x0_ways, l2x0_sets, l2x0_cache_id, l2x0_size);
-	printk(KERN_INFO "      AUX_CTRL 0x%08x, PERFETCH_CTRL 0x%08x, POWER_CTRL  0x%08x\n",
-		aux,prefetch,power);
-	printk(KERN_INFO "      TAG_LATENCY 0x%08x, DATA_LATENCY 0x%08x\n",
-		tag_lan, data_lan);
+	printk(KERN_INFO "l2x0: %d ways, CACHE_ID 0x%08x, AUX_CTRL 0x%08x, Cache size: %d B\n",
+			ways, cache_id, aux, l2x0_size);
 }
 
 #ifdef CONFIG_OF
