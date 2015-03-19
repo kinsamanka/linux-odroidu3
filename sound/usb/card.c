@@ -951,9 +951,11 @@ static struct usb_driver usb_audio_driver = {
 	.name =		"snd-usb-audio",
 	.probe =	usb_audio_probe,
 	.disconnect =	usb_audio_disconnect,
+#ifdef CONFIG_SUSPEND
 	.suspend =	usb_audio_suspend,
 	.resume =	usb_audio_resume,
 	.reset_resume = usb_audio_reset_resume,
+#endif
 	.id_table =	usb_audio_ids,
 	.supports_autosuspend = 1,
 };

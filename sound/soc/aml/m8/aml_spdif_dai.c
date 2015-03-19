@@ -513,8 +513,10 @@ static struct snd_soc_dai_driver aml_spdif_dai[] = {
 					SNDRV_PCM_RATE_96000),
 			.formats = SNDRV_PCM_FMTBIT_S16_LE, },			
 		.ops = &spdif_dai_ops,
+#ifdef CONFIG_SUSPEND
 		.suspend = aml_dai_spdif_suspend,
 		.resume = aml_dai_spdif_resume,
+#endif
 	}	
 };
 static const struct snd_soc_component_driver aml_component= {
