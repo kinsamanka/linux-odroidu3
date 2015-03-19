@@ -710,7 +710,7 @@ static void dwc_otg_id_change_timer_handler(void * parg)
 	unsigned long flags;
 
 	//DWC_DEBUGPL(DBG_HCDV, "%s() %p\n", __func__, otg_dev);
-	local_irq_save(flags);
+	local_irq_save_nort(flags);
 
 	adp_bc.d32 = phy_peri->adp_bc;
 	if(adp_bc.b.iddig){
@@ -721,7 +721,7 @@ static void dwc_otg_id_change_timer_handler(void * parg)
 
 	DWC_TIMER_SCHEDULE(otg_dev->id_change_timer, 100 /* 100 ms */);
 
-	local_irq_restore(flags);
+	local_irq_restore_nort(flags);
 	return;
 }
 /**
